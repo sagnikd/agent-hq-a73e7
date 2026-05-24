@@ -1335,6 +1335,39 @@ export const handler: Handler = async (event) => {
         return ok({ count: blobs.length });
       }
 
+      case "outreach.leads.bulk_add": {
+        const { campaign_id, leads } = params as { campaign_id: string; leads: Array<{ name?: string; email?: string; company?: string; job_title?: string; notes?: string }> };
+        if (!campaign_id) return fail(400, "campaign_id required");
+        if (!Array.isArray(leads) || leads.length === 0) return fail(400, "leads array required");
+        const leadsStore = store(OUTREACH_LEADS);
+        const imported: string[] = [];
+        for (const raw of leads) {
+          const leadId = nanoid(10);
+          const createdAt = new Date().toISOString();
+          const lead = {
+            id: leadId,
+            campaign_id,
+            name: raw.name?.trim() || raw.company?.trim() || "Unknown",
+            email: raw.email?.trim() || null,
+            company: raw.company?.trim() || null,
+            job_title: raw.job_title?.trim() || null,
+            notes: raw.notes?.trim() || null,
+            source: "upload",
+            created_at: createdAt,
+            updated_at: createdAt,
+          };
+          await writeJson(leadsStore, `${campaign_id}/${createdAt}-${leadId}`, lead);
+          imported.push(leadId);
+        }
+        await logActivity({
+          agent_id: null,
+          category: "research",
+          summary: `Imported ${imported.length} leads via Excel upload`,
+          details: { campaign_id, count: imported.length },
+        });
+        return ok({ imported: imported.length, lead_ids: imported });
+      }
+
       case "outreach.leads.add_test": {
         // Self-seed a test lead so the attendee can demo the full send-→-reply
         // loop using their own email. Shows as 🧪 TEST in the UI.
@@ -1452,6 +1485,7 @@ export const handler: Handler = async (event) => {
           sender_name,
           sender_company,
           sender_offer,
+          messaging_doc,
           framework,
           step,
           total_steps,
@@ -1525,7 +1559,10 @@ export const handler: Handler = async (event) => {
             {
               sender_name: typeof sender_name === "string" ? sender_name : undefined,
               sender_company: typeof sender_company === "string" ? sender_company : undefined,
-              sender_offer: typeof sender_offer === "string" ? sender_offer : undefined,
+              sender_offer: [
+                typeof sender_offer === "string" ? sender_offer : null,
+                typeof messaging_doc === "string" && messaging_doc ? `MESSAGING DOC:\n${messaging_doc}` : null,
+              ].filter(Boolean).join("\n\n") || undefined,
               campaign_query: campaign.query as string,
             },
             {
