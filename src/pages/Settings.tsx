@@ -54,9 +54,11 @@ export default function Settings() {
   const [wizardService, setWizardService] = useState<ServiceKey | undefined>(undefined);
   const [busy, setBusy] = useState<ServiceKey | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [llmProvider, setLlmProvider] = useState<"anthropic" | "gemini">("anthropic");
 
   useEffect(() => {
     void refresh();
+    void call<{ provider: "anthropic" | "gemini" }>("config.get_llm_provider").then((r) => setLlmProvider(r.provider)).catch(() => {});
   }, []);
 
   async function refresh() {
@@ -93,6 +95,11 @@ export default function Settings() {
     }
   }
 
+  async function setProvider(p: "anthropic" | "gemini") {
+    setLlmProvider(p);
+    await call("config.set_llm_provider", { provider: p }).catch(() => {});
+  }
+
   const services: ServiceKey[] = ["anthropic", "gemini", "apify", "agentmail"];
   const missing = services.filter((s) => !status?.[s]?.configured);
 
@@ -119,6 +126,41 @@ export default function Settings() {
           </div>
         </GlassCard>
       )}
+
+      {/* LLM Provider toggle */}
+      <div className="mb-6">
+        <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3">Email Generation Model</h2>
+        <div className="grid grid-cols-2 gap-3">
+          {(["anthropic", "gemini"] as const).map((p) => {
+            const configured = !!status?.[p]?.configured;
+            const active = llmProvider === p;
+            return (
+              <button
+                key={p}
+                onClick={() => void setProvider(p)}
+                className={`flex items-center gap-3 p-4 rounded-xl border-2 text-left transition ${
+                  active
+                    ? "border-primary bg-primary/5"
+                    : "border-slate-200 bg-white hover:border-primary/40"
+                }`}
+              >
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${active ? "border-primary" : "border-slate-300"}`}>
+                  {active && <div className="w-2 h-2 rounded-full bg-primary" />}
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900 text-sm">
+                    {p === "anthropic" ? "Claude (Anthropic)" : "Gemini (Google)"}
+                  </div>
+                  <div className={`text-xs mt-0.5 ${configured ? "text-green-600" : "text-slate-400"}`}>
+                    {configured ? "Key configured ✓" : "No key — add in keys below"}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-slate-400 mt-2">Used for ICP preview and email drafting. Falls back to the other provider if selected key is missing.</p>
+      </div>
 
       <div className="grid gap-4">
         {services.map((s) => {

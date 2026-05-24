@@ -35,6 +35,7 @@ const VOICE_SESSIONS = "agent-hq-voice-sessions";
 const VOICE_INVITATIONS = "agent-hq-voice-invitations";
 const PAGES = "agent-hq-pages";
 const SERVICE_CONFIG = "agent-hq-service-config"; // third-party API keys: apify, agentmail, gemini (shared)
+const LLM_PROVIDER_CONFIG = "agent-hq-llm-provider";
 const OUTREACH_CAMPAIGNS = "agent-hq-outreach-campaigns";
 const OUTREACH_LEADS = "agent-hq-outreach-leads"; // key: `<campaign_id>/<lead_id>`
 const OUTREACH_EMAILS = "agent-hq-outreach-emails"; // key: `<campaign_id>/<email_id>`
@@ -120,6 +121,22 @@ async function testServiceKey(name: ServiceKey, key: string): Promise<{ ok: bool
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "Network error" };
   }
+}
+
+async function readLLMProvider(): Promise<"anthropic" | "gemini"> {
+  const rec = await readJson<{ provider: "anthropic" | "gemini" }>(store(LLM_PROVIDER_CONFIG), "pref");
+  return rec?.provider ?? "anthropic";
+}
+
+async function resolveLLMKey(): Promise<{ provider: "anthropic" | "gemini"; key: string }> {
+  const preferred = await readLLMProvider();
+  const preferredKey = await readServiceKey(preferred);
+  if (preferredKey) return { provider: preferred, key: preferredKey };
+  // Fallback to the other provider
+  const fallback = preferred === "anthropic" ? "gemini" : "anthropic";
+  const fallbackKey = await readServiceKey(fallback);
+  if (fallbackKey) return { provider: fallback, key: fallbackKey };
+  throw new Error("No LLM key configured — add an Anthropic or Gemini key in Settings.");
 }
 
 // Write activity log row — fire and forget.
@@ -258,6 +275,7 @@ type SequenceContext = {
 };
 
 async function generateEmailDraft(
+  provider: "anthropic" | "gemini",
   apiKey: string,
   lead: { name?: string; company?: string; website?: string; category?: string; address?: string; notes?: string },
   senderContext: { sender_name?: string; sender_company?: string; sender_offer?: string; campaign_query?: string },
@@ -300,28 +318,40 @@ async function generateEmailDraft(
   }
 
   const userMessage = `RECIPIENT\n${leadSummary || "(no data)"}\n\nSENDER\n${senderSummary || "(no context)"}${sequenceBlock}`;
-  const anthropicBody = {
-    model: "claude-sonnet-4-5",
-    max_tokens: 1024,
-    system: DRAFT_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userMessage }],
-  };
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(anthropicBody),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`Claude draft failed (${r.status}): ${txt.slice(0, 200)}`);
+
+  let text: string;
+  if (provider === "anthropic") {
+    const anthropicBody = {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      system: DRAFT_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    };
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(anthropicBody),
+    });
+    if (!r.ok) { const txt = await r.text(); throw new Error(`Claude draft failed (${r.status}): ${txt.slice(0, 200)}`); }
+    const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
+    text = data.content?.[0]?.text ?? "";
+    if (!text) throw new Error("Claude returned empty draft");
+  } else {
+    const geminiBody = {
+      systemInstruction: { role: "system", parts: [{ text: DRAFT_SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: userMessage }] }],
+      generationConfig: { temperature: 0.7, responseMimeType: "application/json" },
+    };
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(geminiBody) },
+    );
+    if (!r.ok) { const txt = await r.text(); throw new Error(`Gemini draft failed (${r.status}): ${txt.slice(0, 200)}`); }
+    const data = (await r.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    if (!text) throw new Error("Gemini returned empty draft");
   }
-  const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
-  const text = data.content?.[0]?.text ?? "";
-  if (!text) throw new Error("Claude returned empty draft");
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -544,34 +574,39 @@ Rules:
 - "maxResults" = clamp the user-requested number into [10, 200]. If unspecified, use 50.
 - Always return valid JSON. No trailing commas. Double-quoted strings only.`;
 
-async function previewIcpWithClaude(apiKey: string, userQuery: string, maxResultsHint?: number): Promise<StructuredQuery> {
-  const anthropicBody = {
-    model: "claude-sonnet-4-5",
-    max_tokens: 512,
-    system: PREVIEW_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `ICP description:\n${userQuery}\n\nMax results hint: ${typeof maxResultsHint === "number" ? maxResultsHint : "unspecified"}\n\nRespond with ONLY the JSON object, no other text.`,
-      },
-    ],
-  };
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(anthropicBody),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`Claude preview failed (${r.status}): ${txt.slice(0, 200)}`);
+async function previewIcp(provider: "anthropic" | "gemini", apiKey: string, userQuery: string, maxResultsHint?: number): Promise<StructuredQuery> {
+  let text: string;
+  if (provider === "anthropic") {
+    const body = {
+      model: "claude-sonnet-4-5",
+      max_tokens: 512,
+      system: PREVIEW_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: `ICP description:\n${userQuery}\n\nMax results hint: ${typeof maxResultsHint === "number" ? maxResultsHint : "unspecified"}\n\nRespond with ONLY the JSON object, no other text.` }],
+    };
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { const txt = await r.text(); throw new Error(`Claude preview failed (${r.status}): ${txt.slice(0, 200)}`); }
+    const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
+    text = data.content?.[0]?.text ?? "";
+    if (!text) throw new Error("Claude returned empty response");
+  } else {
+    const body = {
+      systemInstruction: { role: "system", parts: [{ text: PREVIEW_SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: `ICP description:\n${userQuery}\n\nMax results hint: ${typeof maxResultsHint === "number" ? maxResultsHint : "unspecified"}` }] }],
+      generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
+    };
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    );
+    if (!r.ok) { const txt = await r.text(); throw new Error(`Gemini preview failed (${r.status}): ${txt.slice(0, 200)}`); }
+    const data = (await r.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    if (!text) throw new Error("Gemini returned empty response");
   }
-  const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
-  const text = data.content?.[0]?.text ?? "";
-  if (!text) throw new Error("Claude returned empty response");
 
   let parsed: unknown;
   try {
@@ -909,6 +944,18 @@ export const handler: Handler = async (event) => {
         return ok({ cleared: true });
       }
 
+      case "config.set_llm_provider": {
+        const { provider } = params as { provider: string };
+        if (provider !== "anthropic" && provider !== "gemini") return fail(400, "provider must be 'anthropic' or 'gemini'");
+        await writeJson(store(LLM_PROVIDER_CONFIG), "pref", { provider });
+        return ok({ provider });
+      }
+
+      case "config.get_llm_provider": {
+        const provider = await readLLMProvider();
+        return ok({ provider });
+      }
+
       // ── VOICE SESSIONS (past conversation transcripts) ────────────
       case "voice.session.save": {
         const { started_at, ended_at, transcripts, tools, invitation_id } = params as Record<string, unknown>;
@@ -1092,14 +1139,9 @@ export const handler: Handler = async (event) => {
         // This is cheap and safe to call repeatedly — no side effects.
         const { query, max_results } = params as Record<string, unknown>;
         if (typeof query !== "string" || !query.trim()) return fail(400, "query required");
-        const anthropicKey = await readServiceKey("anthropic");
-        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
         try {
-          const structured = await previewIcpWithClaude(
-            anthropicKey,
-            query.trim(),
-            typeof max_results === "number" ? max_results : undefined,
-          );
+          const { provider, key } = await resolveLLMKey();
+          const structured = await previewIcp(provider, key, query.trim(), typeof max_results === "number" ? max_results : undefined);
           return ok(structured);
         } catch (err) {
           return fail(500, err instanceof Error ? err.message : "Preview failed");
@@ -1496,8 +1538,13 @@ export const handler: Handler = async (event) => {
         } = params as Record<string, unknown>;
         if (typeof campaign_id !== "string" || !campaign_id) return fail(400, "campaign_id required");
         if (typeof lead_id !== "string" || !lead_id) return fail(400, "lead_id required");
-        const anthropicKey = await readServiceKey("anthropic");
-        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
+        let llmProvider: "anthropic" | "gemini";
+        let llmKey: string;
+        try {
+          ({ provider: llmProvider, key: llmKey } = await resolveLLMKey());
+        } catch (err) {
+          return fail(400, err instanceof Error ? err.message : "No LLM key configured");
+        }
 
         const cs = store(OUTREACH_CAMPAIGNS);
         const campaign = await readJson<Record<string, unknown>>(cs, campaign_id);
@@ -1551,7 +1598,8 @@ export const handler: Handler = async (event) => {
 
         try {
           const draft = await generateEmailDraft(
-            anthropicKey,
+            llmProvider,
+            llmKey,
             {
               name: lead.name as string | undefined,
               company: lead.company as string | undefined,
@@ -1712,8 +1760,13 @@ export const handler: Handler = async (event) => {
         // lead under OUTREACH_EMAILS and bump the campaign's emails_generated.
         const { campaign_id, sender_name, sender_company, sender_offer } = params as Record<string, string>;
         if (!campaign_id) return fail(400, "campaign_id required");
-        const anthropicKey = await readServiceKey("anthropic");
-        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
+        let batchLlmProvider: "anthropic" | "gemini";
+        let batchLlmKey: string;
+        try {
+          ({ provider: batchLlmProvider, key: batchLlmKey } = await resolveLLMKey());
+        } catch (err) {
+          return fail(400, err instanceof Error ? err.message : "No LLM key configured");
+        }
         const cs = store(OUTREACH_CAMPAIGNS);
         const campaign = await readJson<Record<string, unknown>>(cs, campaign_id);
         if (!campaign) return fail(404, "campaign not found");
@@ -1730,7 +1783,8 @@ export const handler: Handler = async (event) => {
         for (const lead of sendable) {
           try {
             const draft = await generateEmailDraft(
-              anthropicKey,
+              batchLlmProvider,
+              batchLlmKey,
               {
                 name: lead.name,
                 company: lead.company,
