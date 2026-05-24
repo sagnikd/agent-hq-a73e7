@@ -43,6 +43,7 @@ const SERVICE_META: Record<ServiceKey, { title: string; summary: string; url: st
 export default function Settings() {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardService, setWizardService] = useState<ServiceKey | undefined>(undefined);
   const [busy, setBusy] = useState<ServiceKey | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -186,7 +187,7 @@ export default function Settings() {
                   )}
                   {!configured && (
                     <button
-                      onClick={() => setWizardOpen(true)}
+                      onClick={() => { setWizardService(s); setWizardOpen(true); }}
                       className="px-4 py-2 rounded-lg bg-primary/20 hover:bg-primary/30 border border-primary/40 text-primary text-xs font-bold tracking-wide transition"
                     >
                       + Add key
@@ -201,8 +202,9 @@ export default function Settings() {
 
       <OnboardingWizard
         open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onlyMissing={missing.length > 0}
+        onClose={() => { setWizardOpen(false); setWizardService(undefined); }}
+        onlyMissing={!wizardService && missing.length > 0}
+        initialService={wizardService}
         onComplete={() => void refresh()}
       />
     </>

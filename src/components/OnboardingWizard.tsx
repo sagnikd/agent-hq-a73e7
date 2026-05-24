@@ -65,9 +65,11 @@ type Props = {
   /** If true, show only steps for services not yet configured. */
   onlyMissing?: boolean;
   onComplete?: () => void;
+  /** Jump directly to this service's step on open. */
+  initialService?: ServiceKey;
 };
 
-export default function OnboardingWizard({ open, onClose, onlyMissing = true, onComplete }: Props) {
+export default function OnboardingWizard({ open, onClose, onlyMissing = true, onComplete, initialService }: Props) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [value, setValue] = useState("");
@@ -84,8 +86,15 @@ export default function OnboardingWizard({ open, onClose, onlyMissing = true, on
 
   useEffect(() => {
     if (!open) return;
-    void refresh();
-  }, [open]);
+    void refresh().then(() => {
+      if (initialService) {
+        const idx = STEPS.findIndex((s) => s.service === initialService);
+        if (idx !== -1) setStepIndex(idx);
+      } else {
+        setStepIndex(0);
+      }
+    });
+  }, [open, initialService]);
 
   useEffect(() => {
     // Reset per-step state when the active step changes.
