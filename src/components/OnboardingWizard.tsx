@@ -3,7 +3,7 @@ import { Check, ExternalLink, Eye, EyeOff, Loader2, Sparkles } from "lucide-reac
 import Modal, { FormField, PrimaryButton, TextInput } from "./Modal";
 import { call } from "@/lib/api";
 
-type ServiceKey = "gemini" | "apify" | "agentmail";
+type ServiceKey = "gemini" | "apify" | "agentmail" | "anthropic";
 
 type ConfigStatus = Record<
   ServiceKey,
@@ -28,14 +28,14 @@ type Step = {
 
 const STEPS: Step[] = [
   {
-    service: "gemini",
-    title: "Gemini API Key",
+    service: "anthropic" as ServiceKey,
+    title: "Anthropic API Key",
     eyebrow: "01 / Brain",
-    tagline: "Powers voice, ICP preview, and email drafting.",
-    why: "Your agent's brain. Free tier covers voice conversations, natural-language ICP-to-query conversion, and AI-written outreach emails. No credit card required.",
-    getKeyUrl: "https://aistudio.google.com/apikey",
-    getKeyLabel: "Google AI Studio",
-    placeholder: "AIza…",
+    tagline: "Powers ICP preview and email drafting.",
+    why: "Claude writes your personalized outreach emails and converts your ICP description into structured Google Maps queries. Get your key free from the Anthropic Console.",
+    getKeyUrl: "https://console.anthropic.com/settings/keys",
+    getKeyLabel: "Anthropic Console",
+    placeholder: "sk-ant-...",
   },
   {
     service: "apify",
@@ -52,10 +52,20 @@ const STEPS: Step[] = [
     title: "AgentMail API Key",
     eyebrow: "03 / Send",
     tagline: "Inbox provisioned in seconds. Sends and receives.",
-    why: "Each dashboard gets its own agent inbox. No domain, no DNS, no warmup. Send outreach, receive real replies, agent acts on them. Built for this use case.",
+    why: "Each dashboard gets its own agent inbox. No domain, no DNS, no warmup. Send outreach, receive real replies, agent acts on them.",
     getKeyUrl: "https://www.agentmail.to/",
     getKeyLabel: "AgentMail",
     placeholder: "amk_…",
+  },
+  {
+    service: "gemini",
+    title: "Gemini API Key",
+    eyebrow: "04 / Voice",
+    tagline: "Powers real-time voice conversations.",
+    why: "Gemini Live handles browser-based voice sessions in the Voice tab. Only needed if you want to talk to your agent — completely optional for outreach.",
+    getKeyUrl: "https://aistudio.google.com/apikey",
+    getKeyLabel: "Google AI Studio",
+    placeholder: "AIza…",
   },
 ];
 

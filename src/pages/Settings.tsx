@@ -5,7 +5,7 @@ import GlassCard from "@/components/GlassCard";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { call } from "@/lib/api";
 
-type ServiceKey = "gemini" | "apify" | "agentmail";
+type ServiceKey = "gemini" | "apify" | "agentmail" | "anthropic";
 
 type ServiceStatus = {
   configured: boolean;
@@ -16,10 +16,18 @@ type ServiceStatus = {
 
 type ConfigStatus = Record<ServiceKey, ServiceStatus>;
 
-const SERVICE_META: Record<ServiceKey, { title: string; summary: string; url: string; urlLabel: string; accent: string }> = {
+const SERVICE_META: Record<ServiceKey, { title: string; subtitle?: string; summary: string; url: string; urlLabel: string; accent: string }> = {
+  anthropic: {
+    title: "Anthropic",
+    subtitle: "ICP preview, email drafting",
+    summary: "ICP preview, email drafting",
+    url: "https://console.anthropic.com/settings/keys",
+    urlLabel: "Anthropic Console",
+    accent: "from-primary/20 to-primary/5 border-primary/30",
+  },
   gemini: {
     title: "Gemini",
-    summary: "Voice, ICP preview, email drafts",
+    summary: "Voice conversations (optional)",
     url: "https://aistudio.google.com/apikey",
     urlLabel: "Google AI Studio",
     accent: "from-primary/20 to-primary/5 border-primary/30",
@@ -85,7 +93,7 @@ export default function Settings() {
     }
   }
 
-  const services: ServiceKey[] = ["gemini", "apify", "agentmail"];
+  const services: ServiceKey[] = ["anthropic", "gemini", "apify", "agentmail"];
   const missing = services.filter((s) => !status?.[s]?.configured);
 
   return (

@@ -41,8 +41,8 @@ const OUTREACH_EMAILS = "agent-hq-outreach-emails"; // key: `<campaign_id>/<emai
 const OUTREACH_REPLIES = "agent-hq-outreach-replies"; // inbound replies from AgentMail
 
 // Service keys we onboard. `gemini` doubles as the voice key — reads through VOICE_CONFIG for back-compat.
-type ServiceKey = "gemini" | "apify" | "agentmail";
-const SERVICE_KEYS: ServiceKey[] = ["gemini", "apify", "agentmail"];
+type ServiceKey = "gemini" | "apify" | "agentmail" | "anthropic";
+const SERVICE_KEYS: ServiceKey[] = ["anthropic", "apify", "agentmail", "gemini"];
 
 type ServiceConfigRecord = { key: string; updated_at: string; last_test?: { ok: boolean; at: string; message?: string } };
 
@@ -78,6 +78,17 @@ async function writeServiceKey(name: ServiceKey, key: string, test?: ServiceConf
 // key and 401/403 on an invalid one. Keeps onboarding fast.
 async function testServiceKey(name: ServiceKey, key: string): Promise<{ ok: boolean; message: string }> {
   try {
+    if (name === "anthropic") {
+      const r = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+      });
+      if (r.ok) return { ok: true, message: "Anthropic key verified" };
+      const body = await r.text();
+      return { ok: false, message: `Anthropic rejected key (${r.status}): ${body.slice(0, 120)}` };
+    }
     if (name === "gemini") {
       // Gemini "models" list is a cheap authenticated GET.
       const r = await fetch(
@@ -247,7 +258,7 @@ type SequenceContext = {
 };
 
 async function generateEmailDraft(
-  geminiKey: string,
+  apiKey: string,
   lead: { name?: string; company?: string; website?: string; category?: string; address?: string; notes?: string },
   senderContext: { sender_name?: string; sender_company?: string; sender_offer?: string; campaign_query?: string },
   sequence: SequenceContext = {},
@@ -288,27 +299,29 @@ async function generateEmailDraft(
     }
   }
 
-  const body = {
-    systemInstruction: { role: "system", parts: [{ text: DRAFT_SYSTEM_PROMPT }] },
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: `RECIPIENT\n${leadSummary || "(no data)"}\n\nSENDER\n${senderSummary || "(no context)"}${sequenceBlock}` }],
-      },
-    ],
-    generationConfig: { temperature: 0.7, responseMimeType: "application/json" },
+  const userMessage = `RECIPIENT\n${leadSummary || "(no data)"}\n\nSENDER\n${senderSummary || "(no context)"}${sequenceBlock}`;
+  const anthropicBody = {
+    model: "claude-sonnet-4-5",
+    max_tokens: 1024,
+    system: DRAFT_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userMessage }],
   };
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-  );
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(anthropicBody),
+  });
   if (!r.ok) {
     const txt = await r.text();
-    throw new Error(`Gemini draft failed (${r.status}): ${txt.slice(0, 200)}`);
+    throw new Error(`Claude draft failed (${r.status}): ${txt.slice(0, 200)}`);
   }
-  const data = (await r.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text) throw new Error("Gemini returned empty draft");
+  const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
+  const text = data.content?.[0]?.text ?? "";
+  if (!text) throw new Error("Claude returned empty draft");
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -531,43 +544,34 @@ Rules:
 - "maxResults" = clamp the user-requested number into [10, 200]. If unspecified, use 50.
 - Always return valid JSON. No trailing commas. Double-quoted strings only.`;
 
-async function previewIcpWithGemini(geminiKey: string, userQuery: string, maxResultsHint?: number): Promise<StructuredQuery> {
-  const body = {
-    systemInstruction: { role: "system", parts: [{ text: PREVIEW_SYSTEM_PROMPT }] },
-    contents: [
+async function previewIcpWithClaude(apiKey: string, userQuery: string, maxResultsHint?: number): Promise<StructuredQuery> {
+  const anthropicBody = {
+    model: "claude-sonnet-4-5",
+    max_tokens: 512,
+    system: PREVIEW_SYSTEM_PROMPT,
+    messages: [
       {
         role: "user",
-        parts: [
-          {
-            text: `ICP description:\n${userQuery}\n\nMax results hint: ${
-              typeof maxResultsHint === "number" ? maxResultsHint : "unspecified"
-            }`,
-          },
-        ],
+        content: `ICP description:\n${userQuery}\n\nMax results hint: ${typeof maxResultsHint === "number" ? maxResultsHint : "unspecified"}\n\nRespond with ONLY the JSON object, no other text.`,
       },
     ],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-    },
   };
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
     },
-  );
+    body: JSON.stringify(anthropicBody),
+  });
   if (!r.ok) {
     const txt = await r.text();
-    throw new Error(`Gemini preview failed (${r.status}): ${txt.slice(0, 200)}`);
+    throw new Error(`Claude preview failed (${r.status}): ${txt.slice(0, 200)}`);
   }
-  const data = (await r.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text) throw new Error("Gemini returned empty response");
+  const data = (await r.json()) as { content?: Array<{ type: string; text?: string }> };
+  const text = data.content?.[0]?.text ?? "";
+  if (!text) throw new Error("Claude returned empty response");
 
   let parsed: unknown;
   try {
@@ -1088,11 +1092,11 @@ export const handler: Handler = async (event) => {
         // This is cheap and safe to call repeatedly — no side effects.
         const { query, max_results } = params as Record<string, unknown>;
         if (typeof query !== "string" || !query.trim()) return fail(400, "query required");
-        const geminiKey = await readServiceKey("gemini");
-        if (!geminiKey) return fail(400, "Gemini key not configured — open Settings and add it first.");
+        const anthropicKey = await readServiceKey("anthropic");
+        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
         try {
-          const structured = await previewIcpWithGemini(
-            geminiKey,
+          const structured = await previewIcpWithClaude(
+            anthropicKey,
             query.trim(),
             typeof max_results === "number" ? max_results : undefined,
           );
@@ -1492,8 +1496,8 @@ export const handler: Handler = async (event) => {
         } = params as Record<string, unknown>;
         if (typeof campaign_id !== "string" || !campaign_id) return fail(400, "campaign_id required");
         if (typeof lead_id !== "string" || !lead_id) return fail(400, "lead_id required");
-        const geminiKey = await readServiceKey("gemini");
-        if (!geminiKey) return fail(400, "Gemini key not configured");
+        const anthropicKey = await readServiceKey("anthropic");
+        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
 
         const cs = store(OUTREACH_CAMPAIGNS);
         const campaign = await readJson<Record<string, unknown>>(cs, campaign_id);
@@ -1547,7 +1551,7 @@ export const handler: Handler = async (event) => {
 
         try {
           const draft = await generateEmailDraft(
-            geminiKey,
+            anthropicKey,
             {
               name: lead.name as string | undefined,
               company: lead.company as string | undefined,
@@ -1704,12 +1708,12 @@ export const handler: Handler = async (event) => {
       }
 
       case "outreach.emails.generate": {
-        // Gemini drafts a per-lead email. We write one email record per
+        // Claude drafts a per-lead email. We write one email record per
         // lead under OUTREACH_EMAILS and bump the campaign's emails_generated.
         const { campaign_id, sender_name, sender_company, sender_offer } = params as Record<string, string>;
         if (!campaign_id) return fail(400, "campaign_id required");
-        const geminiKey = await readServiceKey("gemini");
-        if (!geminiKey) return fail(400, "Gemini key not configured");
+        const anthropicKey = await readServiceKey("anthropic");
+        if (!anthropicKey) return fail(400, "Anthropic key not configured — open Settings and add it first.");
         const cs = store(OUTREACH_CAMPAIGNS);
         const campaign = await readJson<Record<string, unknown>>(cs, campaign_id);
         if (!campaign) return fail(404, "campaign not found");
@@ -1726,7 +1730,7 @@ export const handler: Handler = async (event) => {
         for (const lead of sendable) {
           try {
             const draft = await generateEmailDraft(
-              geminiKey,
+              anthropicKey,
               {
                 name: lead.name,
                 company: lead.company,
