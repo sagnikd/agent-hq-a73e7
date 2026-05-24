@@ -298,7 +298,7 @@ export default function OutreachWizard({ open, onClose, onCreated }: Props) {
   return (
     <Modal
       open={open}
-      onClose={isGenerating ? undefined : close}
+      onClose={isGenerating ? () => {} : close}
       title={titleMap[step]}
       description={descMap[step]}
       maxWidth="max-w-2xl"
