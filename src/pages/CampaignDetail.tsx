@@ -1263,11 +1263,11 @@ function LeadDetailModal({ lead, onClose }: { lead: Lead; onClose: () => void })
         {/* Metadata block */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <DetailRow label="Category" value={lead.category} />
-          <DetailRow label="Rating" value={lead.rating !== null ? `★ ${lead.rating}${lead.reviews_count ? ` (${lead.reviews_count} reviews)` : ""}` : null} />
+          <DetailRow label="Rating" value={lead.rating != null ? `★ ${lead.rating}${lead.reviews_count ? ` (${lead.reviews_count} reviews)` : ""}` : null} />
           <DetailRow label="Address" value={lead.address} full />
         </div>
 
-        {lead.notes && <DetailRow label="Notes" value={lead.notes} full />}
+        {lead.notes && <DetailRow label="Notes" value={lead.notes} full expandable />}
 
         {/* Raw Apify data — collapsed by default */}
         {lead.raw && Object.keys(lead.raw).length > 0 && (
@@ -1336,6 +1336,7 @@ function DetailRow({
   href,
   external,
   full,
+  expandable,
 }: {
   label: string;
   value: string | null;
@@ -1343,7 +1344,9 @@ function DetailRow({
   href?: string | null;
   external?: boolean;
   full?: boolean;
+  expandable?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!value) return null;
   const content = href ? (
     <a
@@ -1356,12 +1359,19 @@ function DetailRow({
       {external && <ExternalLink size={11} className="shrink-0" />}
     </a>
   ) : (
-    <span className="text-slate-800 truncate">{value}</span>
+    <span className={`text-slate-800 ${expandable && !expanded ? "truncate" : "whitespace-pre-wrap break-words"}`}>{value}</span>
   );
   return (
-    <div className={`${full ? "col-span-full" : ""} rounded-lg bg-slate-50 border border-slate-100 px-3 py-2`}>
-      <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-0.5">{label}</div>
-      <div className={`text-sm ${mono ? "font-mono" : ""} truncate`}>{content}</div>
+    <div
+      className={`${full ? "col-span-full" : ""} rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 ${expandable ? "cursor-pointer select-none" : ""}`}
+      onClick={expandable ? () => setExpanded((e) => !e) : undefined}
+      title={expandable && !expanded ? value : undefined}
+    >
+      <div className="flex items-center justify-between mb-0.5">
+        <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">{label}</div>
+        {expandable && <span className="text-[10px] text-primary font-semibold">{expanded ? "collapse" : "expand"}</span>}
+      </div>
+      <div className={`text-sm ${mono ? "font-mono" : ""} ${expandable && !expanded ? "truncate" : ""}`}>{content}</div>
     </div>
   );
 }
