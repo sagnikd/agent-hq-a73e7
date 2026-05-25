@@ -684,7 +684,8 @@ export default function CampaignDetail() {
                       )}
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono mt-0.5 flex-wrap">
-                      {l.email && <span className="text-slate-600">{l.email}</span>}
+                      {l.company && <span className="text-slate-700 font-semibold">{l.company}</span>}
+                      {l.email && <span className="text-slate-500">{l.company ? "· " : ""}{l.email}</span>}
                       {l.category && <span>· {l.category}</span>}
                       {l.rating !== null && <span>· <Star size={9} className="inline -mt-0.5" /> {l.rating}{l.reviews_count ? ` (${l.reviews_count})` : ""}</span>}
                       {l.address && <span className="truncate max-w-[220px]">· {l.address}</span>}
